@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <string>
 
 #ifdef _WIN32
     #ifndef NOMINMAX
@@ -27,6 +28,12 @@ namespace SocketUtils {
     constexpr std::uint16_t kPort = 8080;
     constexpr const char* kServerIp = "127.0.0.1";
     constexpr const char* kReplyMessage = "Arquivos recebidos com sucesso!";
+
+    // Multicast
+    constexpr const char* kMulticastGroup = "239.0.0.1";
+    constexpr std::uint16_t kMulticastPort = 9000;
+    constexpr int kHeartbeatIntervalMs = 1000;
+    constexpr int kHeartbeatTimeoutMs  = 3000;
 
 #ifdef _WIN32
     class WinsockContext {
@@ -54,5 +61,10 @@ namespace SocketUtils {
     bool RecvAll(SocketType socket_fd, void* data, std::size_t length);
     void SendUint32(SocketType socket_fd, std::uint32_t value);
     std::uint32_t ReceiveUint32(SocketType socket_fd);
+
+    // Multicast
+    bool SendUdpMulticast(const std::string& groupAddress, std::uint16_t port, const std::string& payload);
+    SocketType CreateUdpMulticastListener(const std::string& groupAddress, std::uint16_t port);
+    bool ReceiveDatagram(SocketType socket_fd, std::string& outPayload, int timeoutMs);
 
 }

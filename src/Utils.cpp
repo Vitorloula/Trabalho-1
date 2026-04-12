@@ -1,5 +1,7 @@
 #include "Utils.hpp"
 #include <stdexcept>
+#include <array>
+
 
 namespace SocketUtils {
 
@@ -75,6 +77,74 @@ namespace SocketUtils {
             throw std::runtime_error("Falha ao receber uint32 no socket.");
         }
         return ntohl(network_value);
+    }
+
+
+    // Multicast
+    bool SendUdpMulticast(const std::string& groupAddress, std::uint16_t port, const std::string& payload) {
+        SocketGuard udp(socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP));
+        if (udp.get() == kInvalidSocket) return false;
+
+        unsigned char ttl = 1;
+        setsockopt(udp.get(), IPPROTO_IP, IP_MULTICAST_TTL, reinterpret_cast<const char*>(&ttl), sizeof(ttl));
+
+        sockaddr_in target{};
+        target.sin_family = AF_INET;
+        target.sin_port = htons(port);
+        inet_pton(AF_INET, groupAddress.c_str(), &target.sin_addr);
+
+        int sent = sendto(udp.get(), payload.data(), static_cast<int>(payload.size()), 0,
+                          reinterpret_cast<const sockaddr*>(&target), sizeof(target));
+        return sent >= 0;
+    }
+
+    SocketType CreateUdpMulticastListener(const std::string& groupAddress, std::uint16_t port) {
+        SocketType udp = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+        if (udp == kInvalidSocket) return kInvalidSocket;
+
+        int reuse = 1;
+        setsockopt(udp, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&reuse), sizeof(reuse));
+
+        sockaddr_in local{};
+        local.sin_family = AF_INET;
+        local.sin_addr.s_addr = htonl(INADDR_ANY);
+        local.sin_port = htons(port);
+
+        if (bind(udp, reinterpret_cast<const sockaddr*>(&local), sizeof(local)) != 0) {
+            CloseSocket(udp);
+            return kInvalidSocket;
+        }
+
+        ip_mreq group{};
+        inet_pton(AF_INET, groupAddress.c_str(), &group.imr_multiaddr);
+        group.imr_interface.s_addr = htonl(INADDR_ANY);
+        setsockopt(udp, IPPROTO_IP, IP_ADD_MEMBERSHIP, reinterpret_cast<const char*>(&group), sizeof(group));
+
+        return udp;
+    }
+
+    bool ReceiveDatagram(SocketType socket_fd, std::string& outPayload, int timeoutMs) {
+        outPayload.clear();
+        
+        fd_set readSet;
+        FD_ZERO(&readSet);
+        FD_SET(socket_fd, &readSet);
+
+        timeval timeout{};
+        timeout.tv_sec = timeoutMs / 1000;
+        timeout.tv_usec = (timeoutMs % 1000) * 1000;
+
+        int ready = select(static_cast<int>(socket_fd) + 1, &readSet, nullptr, nullptr, &timeout);
+        if (ready <= 0) return false;
+
+        std::array<char, 4096> buffer{};
+        int received = recvfrom(socket_fd, buffer.data(), static_cast<int>(buffer.size() - 1), 0, nullptr, nullptr);
+        
+        if (received <= 0) return false;
+        
+        buffer[static_cast<std::size_t>(received)] = '\0';
+        outPayload.assign(buffer.data(), static_cast<std::size_t>(received));
+        return true;
     }
 
 }
