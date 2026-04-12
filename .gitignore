@@ -1,0 +1,17 @@
+# Compilação
+*.o
+*.obj
+*.exe
+*.out
+*.app
+
+# IDEs e Editores
+.vscode/
+.vs/
+*.swp
+*.swo
+.DS_Store
+
+# Pasta de build
+build/
+bin/
