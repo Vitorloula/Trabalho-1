@@ -1,7 +1,5 @@
 #include "Utils.hpp"
 #include <stdexcept>
-#include <array>
-
 
 namespace SocketUtils {
 
@@ -79,8 +77,6 @@ namespace SocketUtils {
         return ntohl(network_value);
     }
 
-
-    // Multicast
     bool SendUdpMulticast(const std::string& groupAddress, std::uint16_t port, const std::string& payload) {
         SocketGuard udp(socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP));
         if (udp.get() == kInvalidSocket) return false;

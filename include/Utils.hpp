@@ -1,7 +1,8 @@
 #pragma once
 
-#include <cstdint>
+#include <array>
 #include <cstddef>
+#include <cstdint>
 #include <string>
 
 #ifdef _WIN32
@@ -29,7 +30,6 @@ namespace SocketUtils {
     constexpr const char* kServerIp = "127.0.0.1";
     constexpr const char* kReplyMessage = "Arquivos recebidos com sucesso!";
 
-    // Multicast
     constexpr const char* kMulticastGroup = "239.0.0.1";
     constexpr std::uint16_t kMulticastPort = 9000;
     constexpr int kHeartbeatIntervalMs = 1000;
@@ -62,7 +62,6 @@ namespace SocketUtils {
     void SendUint32(SocketType socket_fd, std::uint32_t value);
     std::uint32_t ReceiveUint32(SocketType socket_fd);
 
-    // Multicast
     bool SendUdpMulticast(const std::string& groupAddress, std::uint16_t port, const std::string& payload);
     SocketType CreateUdpMulticastListener(const std::string& groupAddress, std::uint16_t port);
     bool ReceiveDatagram(SocketType socket_fd, std::string& outPayload, int timeoutMs);

@@ -4,6 +4,8 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <sstream>
@@ -11,6 +13,8 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+namespace fs = std::filesystem;
 
 
 static SocketType TryBindTcp(std::uint16_t port) {
@@ -86,9 +90,31 @@ static void HandleClient(SocketType client_fd) {
     const std::vector<File> files =
         file_input_stream.readFiles(static_cast<int>(file_count));
 
+    const fs::path output_dir("./arquivos");
+    fs::create_directories(output_dir);
+
     for (const File& f : files) {
-        std::cout << "        ID=" << f.getId()
-                  << " Nome=" << f.getName() << std::endl;
+        std::cout << " Nome=" << f.getName()
+                  << " Tamanho=" << f.getSizeBytes() << " bytes"
+                  << std::endl;
+
+        const fs::path dest_path = output_dir / f.getName();
+        std::ofstream ofs(dest_path, std::ios::binary | std::ios::trunc);
+        if (!ofs) {
+            std::cerr << "Erro ao criar arquivo: " << dest_path << std::endl;
+            continue;
+        }
+
+        const auto& content = f.getContent();
+        if (!content.empty()) {
+            ofs.write(content.data(), static_cast<std::streamsize>(content.size()));
+            if (!ofs) {
+                std::cerr << "Erro ao gravar conteudo em: " << dest_path << std::endl;
+                continue;
+            }
+        }
+
+        std::cout << "        Arquivo salvo em: " << dest_path << std::endl;
     }
 
     std::string sync_data;
@@ -123,7 +149,6 @@ static void RunAsLeader(SocketType tcp_fd) {
     std::thread hb_thread(HeartbeatThread, std::ref(hb_running));
 
     while (true) {
-
         SocketType client_fd = accept(server.get(), nullptr, nullptr);
         if (client_fd == kInvalidSocket) {
             continue;
@@ -159,8 +184,6 @@ static bool RunAsBackup() {
         if (SocketUtils::ReceiveDatagram(udp, msg, 500)) {
             if (msg.rfind("HEARTBEAT|", 0) == 0) {
                 last_heartbeat = std::chrono::steady_clock::now();
-            } else if (msg.rfind("SYNC|", 0) == 0) {
-                std::string dados = msg.substr(5);
             }
         }
 

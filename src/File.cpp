@@ -104,14 +104,22 @@ std::string ReadString(std::istream& in) {
 } // namespace
 
 File::File()
-	: _id(0), _folder_id(0), _name(), _size_bytes(0) {}
+	: _id(0), _folder_id(0), _name(), _size_bytes(0), _content() {}
 
 File::File(
 	std::uint64_t id,
 	std::uint64_t folder_id,
 	const std::string& name,
 	std::uint64_t size_bytes)
-	: _id(id), _folder_id(folder_id), _name(name), _size_bytes(size_bytes) {}
+	: _id(id), _folder_id(folder_id), _name(name), _size_bytes(size_bytes), _content() {}
+
+File::File(
+	std::uint64_t id,
+	std::uint64_t folder_id,
+	const std::string& name,
+	std::uint64_t size_bytes,
+	std::vector<char> content)
+	: _id(id), _folder_id(folder_id), _name(name), _size_bytes(size_bytes), _content(std::move(content)) {}
 
 std::uint64_t File::getId() const {
 	return _id;
@@ -145,6 +153,14 @@ void File::setSizeBytes(std::uint64_t size_bytes) {
 	_size_bytes = size_bytes;
 }
 
+const std::vector<char>& File::getContent() const {
+	return _content;
+}
+
+void File::setContent(std::vector<char> content) {
+	_content = std::move(content);
+}
+
 
 //FileOutputStream
 
@@ -163,6 +179,14 @@ void FileOutputStream::write() {
 		WriteUint64(_destination, _files[i].getFolderId());
 		WriteString(_destination, _files[i].getName());
 		WriteUint64(_destination, _files[i].getSizeBytes());
+
+		const auto& content = _files[i].getContent();
+		if (!content.empty()) {
+			_destination.write(content.data(), static_cast<std::streamsize>(content.size()));
+			if (!_destination) {
+				throw std::runtime_error("Falha ao escrever conteudo do arquivo no stream de destino.");
+			}
+		}
 	}
 }
 
@@ -187,7 +211,16 @@ std::vector<File> FileInputStream::readFiles(int count) {
 		const std::string name = ReadString(_source);
 		const std::uint64_t size_bytes = ReadUint64(_source);
 
-		files.emplace_back(id, folder_id, name, size_bytes);
+		std::vector<char> content;
+		if (size_bytes > 0) {
+			content.resize(static_cast<std::size_t>(size_bytes));
+			_source.read(content.data(), static_cast<std::streamsize>(size_bytes));
+			if (!_source) {
+				throw std::runtime_error("Falha ao ler conteudo do arquivo do stream de origem.");
+			}
+		}
+
+		files.emplace_back(id, folder_id, name, size_bytes, std::move(content));
 	}
 
 	return files;
