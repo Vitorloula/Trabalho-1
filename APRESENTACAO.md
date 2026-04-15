@@ -1,3 +1,5 @@
+Alunos: LINYKER VINICIUS GOMES BARBOSA - 556280, VITOR LOULA SILVA - 540622
+
 # Apresentação: Sockets e Streams em C++ (Trabalho-1)
 
 Este documento apresenta a fundamentação teórica e a implementação prática dos conceitos de Sockets, Streams, Serialização e Multicast, baseando-se no projeto **Sincronização Distribuída de Arquivos** localizado em `Trabalho-1`.
