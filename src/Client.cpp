@@ -1,16 +1,14 @@
 #include "File.hpp"
-#include "Utils.hpp"
+#include "Workspace.hpp"
+#include "IPCModule.hpp"
+#include "json.hpp"
 
-#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <limits>
-#include <sstream>
 #include <stdexcept>
 #include <string>
-#include <thread>
 #include <vector>
 
 #ifdef _WIN32
@@ -19,9 +17,97 @@
 #endif
 
 namespace fs = std::filesystem;
+using json = nlohmann::json;
 
-static constexpr int kMaxRetries = 5;
-static constexpr int kRetryDelaySeconds = 2;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SaveBoxProxy — Proxy RMI (camada de aplicação do cliente)
+//
+// Cada método serializa seus argumentos em JSON, invoca
+// ipc.doOperation() e desserializa a resposta. Em nenhum
+// momento o Proxy (ou o main) enxerga sockets.
+// ═══════════════════════════════════════════════════════════════════════════
+
+class SaveBoxProxy {
+public:
+	SaveBoxProxy(const std::string& serverIp, int serverPort)
+		: _ipc()
+		, _serverRef{serverIp, serverPort, "SaveBoxServer"} {}
+
+	// ────────────────────────────────────────────────────────────
+	// 1. uploadFile  — Passagem por VALOR
+	//    Serializa o objeto File inteiro (metadados + conteúdo em base64)
+	// ────────────────────────────────────────────────────────────
+	std::string uploadFile(const File& f) {
+		json args;
+		args["file"] = f.toJson();
+
+		std::string replyJson = _ipc.doOperation(_serverRef, "uploadFile", args.dump());
+		json reply = json::parse(replyJson);
+		return reply.value("status", "OK");
+	}
+
+	// ────────────────────────────────────────────────────────────
+	// 2. listFiles — Passagem por VALOR (retorna lista)
+	// ────────────────────────────────────────────────────────────
+	std::vector<File> listFiles() {
+		json args;
+		args["workspace_id"] = 1;
+
+		std::string replyJson = _ipc.doOperation(_serverRef, "listFiles", args.dump());
+		json reply = json::parse(replyJson);
+
+		std::vector<File> files;
+		if (reply.contains("files")) {
+			for (const auto& fj : reply["files"]) {
+				File f;
+				f.fromJson(fj);
+				files.push_back(std::move(f));
+			}
+		}
+		return files;
+	}
+
+	// ────────────────────────────────────────────────────────────
+	// 3. deleteFile — Passagem por VALOR (ID simples)
+	// ────────────────────────────────────────────────────────────
+	std::string deleteFile(std::uint64_t fileId) {
+		json args;
+		args["file_id"] = fileId;
+
+		std::string replyJson = _ipc.doOperation(_serverRef, "deleteFile", args.dump());
+		json reply = json::parse(replyJson);
+		return reply.value("status", "OK");
+	}
+
+	// ────────────────────────────────────────────────────────────
+	// 4. getWorkspaceRef — Passagem por REFERÊNCIA
+	//    Não retorna o objeto Workspace, mas sim um RemoteObjectRef
+	//    que o cliente pode usar em chamadas subsequentes.
+	// ────────────────────────────────────────────────────────────
+	RemoteObjectRef getWorkspaceRef(std::uint64_t userId) {
+		json args;
+		args["user_id"] = userId;
+
+		std::string replyJson = _ipc.doOperation(_serverRef, "getWorkspaceRef", args.dump());
+		json reply = json::parse(replyJson);
+
+		RemoteObjectRef ref;
+		ref.ip       = reply.at("ip").get<std::string>();
+		ref.port     = reply.at("port").get<int>();
+		ref.objectId = reply.at("objectId").get<std::string>();
+		return ref;
+	}
+
+private:
+	IPCModule _ipc;
+	RemoteObjectRef _serverRef;
+};
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Funções auxiliares do cliente
+// ═══════════════════════════════════════════════════════════════════════════
 
 static std::string SelectFile() {
 #ifdef _WIN32
@@ -56,43 +142,10 @@ static std::string SelectFile() {
 #endif
 }
 
-static SocketType ConnectWithRetry(const char* server_ip, std::uint16_t port) {
-	for (int attempt = 1; attempt <= kMaxRetries; ++attempt) {
-		SocketType sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-		if (sock == kInvalidSocket) {
-			throw std::runtime_error("Falha ao criar socket TCP do cliente.");
-		}
 
-		sockaddr_in server_addr{};
-		server_addr.sin_family = AF_INET;
-		server_addr.sin_port = htons(port);
-
-		if (inet_pton(AF_INET, server_ip, &server_addr.sin_addr) <= 0) {
-			SocketUtils::CloseSocket(sock);
-			throw std::runtime_error("Falha ao converter o IP do servidor.");
-		}
-
-		if (connect(sock, reinterpret_cast<const sockaddr*>(&server_addr),
-					static_cast<int>(sizeof(server_addr))) == 0) {
-			std::cout << "Conectado ao servidor " << server_ip << ":" << port << std::endl;
-			return sock;
-		}
-
-		SocketUtils::CloseSocket(sock);
-
-		if (attempt < kMaxRetries) {
-			std::cerr << "Tentativa " << attempt << "/" << kMaxRetries
-					  << " falhou. Tentando novamente em " << kRetryDelaySeconds << "s..."
-					  << std::endl;
-			std::this_thread::sleep_for(std::chrono::seconds(kRetryDelaySeconds));
-		}
-	}
-
-	throw std::runtime_error(
-		"Falha ao conectar em " + std::string(server_ip) + ":" +
-		std::to_string(port) + " apos " + std::to_string(kMaxRetries) + " tentativas.");
-}
-
+// ═══════════════════════════════════════════════════════════════════════════
+// main — O cliente NÃO enxerga sockets, apenas usa o SaveBoxProxy
+// ═══════════════════════════════════════════════════════════════════════════
 
 int main() {
 	try {
@@ -100,6 +153,15 @@ int main() {
 			SocketUtils::WinsockContext winsock_context;
 		#endif
 
+		SaveBoxProxy proxy("127.0.0.1", 8080);
+
+		// ── 1. Obter referência remota ao workspace (passagem por referência) ──
+		std::cout << "Obtendo referencia remota ao workspace..." << std::endl;
+		RemoteObjectRef wsRef = proxy.getWorkspaceRef(1);
+		std::cout << "Workspace remoto: " << wsRef.objectId
+		          << " em " << wsRef.ip << ":" << wsRef.port << std::endl;
+
+		// ── 2. Upload de arquivo (passagem por valor) ──
 		const std::string filepath = SelectFile();
 
 		const fs::path file_path(filepath);
@@ -126,43 +188,18 @@ int main() {
 		}
 		ifs.close();
 
-		SocketUtils::SocketGuard client_socket(
-			ConnectWithRetry(SocketUtils::kServerIp, SocketUtils::kPort));
+		File file_to_upload(1, 0, file_name, file_size, std::move(content));
 
-		std::vector<File> files = {
-			File(1, 0, file_name, file_size, std::move(content))};
+		std::string result = proxy.uploadFile(file_to_upload);
+		std::cout << "Resposta do servidor: " << result << std::endl;
 
-		std::stringstream payload_stream(std::ios::in | std::ios::out | std::ios::binary);
-		FileOutputStream file_output_stream(files.data(), files.size(), payload_stream);
-		file_output_stream.write();
-
-		const std::string payload = payload_stream.str();
-
-		if (files.size() > std::numeric_limits<std::uint32_t>::max()) {
-			throw std::runtime_error("Quantidade de arquivos excede uint32.");
+		// ── 3. Listar arquivos ──
+		std::cout << "\nListando arquivos no servidor..." << std::endl;
+		auto files = proxy.listFiles();
+		for (const auto& f : files) {
+			std::cout << "  - " << f.getName() << " (" << f.getSizeBytes() << " bytes)" << std::endl;
 		}
 
-		if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
-			throw std::runtime_error("Payload excede tamanho maximo de uint32.");
-		}
-
-		SocketUtils::SendUint32(client_socket.get(), static_cast<std::uint32_t>(files.size()));
-		SocketUtils::SendUint32(client_socket.get(), static_cast<std::uint32_t>(payload.size()));
-
-		if (!payload.empty() &&
-			!SocketUtils::SendAll(client_socket.get(), payload.data(), payload.size())) {
-			throw std::runtime_error("Falha ao enviar payload serializado.");
-		}
-
-		const std::uint32_t reply_size = SocketUtils::ReceiveUint32(client_socket.get());
-		std::string reply(reply_size, '\0');
-
-		if (reply_size > 0 &&
-			!SocketUtils::RecvAll(client_socket.get(), &reply[0], reply.size())) {
-			throw std::runtime_error("Falha ao receber resposta do servidor.");
-		}
-
-		std::cout << "Resposta do servidor: " << reply << std::endl;
 		return 0;
 	} catch (const std::exception& ex) {
 		std::cerr << "Erro no cliente: " << ex.what() << std::endl;

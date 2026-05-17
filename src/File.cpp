@@ -1,117 +1,82 @@
 #include "File.hpp"
 
-#include <array>
-#include <limits>
 #include <stdexcept>
 #include <vector>
 
+// ── Base64 helpers (para serializar conteúdo binário em JSON) ──
+
 namespace {
 
-void WriteUint32(std::ostream& out, std::uint32_t value) {
-	std::array<std::uint8_t, 4> buffer = {
-		static_cast<std::uint8_t>((value >> 24) & 0xFF),
-		static_cast<std::uint8_t>((value >> 16) & 0xFF),
-		static_cast<std::uint8_t>((value >> 8) & 0xFF),
-		static_cast<std::uint8_t>(value & 0xFF)};
+static const char kBase64Chars[] =
+	"ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	"abcdefghijklmnopqrstuvwxyz"
+	"0123456789+/";
 
-	out.write(reinterpret_cast<const char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
-	if (!out) {
-		throw std::runtime_error("Falha ao escrever uint32 no stream de destino.");
+std::string Base64Encode(const std::vector<char>& data) {
+	std::string encoded;
+	if (data.empty()) return encoded;
+
+	const auto* bytes = reinterpret_cast<const unsigned char*>(data.data());
+	std::size_t len = data.size();
+	encoded.reserve(((len + 2) / 3) * 4);
+
+	for (std::size_t i = 0; i < len; i += 3) {
+		unsigned int triple = static_cast<unsigned int>(bytes[i]) << 16;
+		if (i + 1 < len) triple |= static_cast<unsigned int>(bytes[i + 1]) << 8;
+		if (i + 2 < len) triple |= static_cast<unsigned int>(bytes[i + 2]);
+
+		encoded.push_back(kBase64Chars[(triple >> 18) & 0x3F]);
+		encoded.push_back(kBase64Chars[(triple >> 12) & 0x3F]);
+		encoded.push_back((i + 1 < len) ? kBase64Chars[(triple >> 6) & 0x3F] : '=');
+		encoded.push_back((i + 2 < len) ? kBase64Chars[triple & 0x3F] : '=');
 	}
+	return encoded;
 }
 
-void WriteUint64(std::ostream& out, std::uint64_t value) {
-	std::array<std::uint8_t, 8> buffer = {
-		static_cast<std::uint8_t>((value >> 56) & 0xFF),
-		static_cast<std::uint8_t>((value >> 48) & 0xFF),
-		static_cast<std::uint8_t>((value >> 40) & 0xFF),
-		static_cast<std::uint8_t>((value >> 32) & 0xFF),
-		static_cast<std::uint8_t>((value >> 24) & 0xFF),
-		static_cast<std::uint8_t>((value >> 16) & 0xFF),
-		static_cast<std::uint8_t>((value >> 8) & 0xFF),
-		static_cast<std::uint8_t>(value & 0xFF)};
-
-	out.write(reinterpret_cast<const char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
-	if (!out) {
-		throw std::runtime_error("Falha ao escrever uint64 no stream de destino.");
-	}
+static int Base64CharIndex(char c) {
+	if (c >= 'A' && c <= 'Z') return c - 'A';
+	if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+	if (c >= '0' && c <= '9') return c - '0' + 52;
+	if (c == '+') return 62;
+	if (c == '/') return 63;
+	return -1;
 }
 
-std::uint32_t ReadUint32(std::istream& in) {
-	std::array<std::uint8_t, 4> buffer{};
-	in.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
-	if (!in) {
-		throw std::runtime_error("Falha ao ler uint32 do stream de origem.");
+std::vector<char> Base64Decode(const std::string& encoded) {
+	std::vector<char> decoded;
+	if (encoded.empty()) return decoded;
+
+	decoded.reserve((encoded.size() / 4) * 3);
+
+	for (std::size_t i = 0; i < encoded.size(); i += 4) {
+		int a = Base64CharIndex(encoded[i]);
+		int b = (i + 1 < encoded.size()) ? Base64CharIndex(encoded[i + 1]) : -1;
+		int c = (i + 2 < encoded.size()) ? Base64CharIndex(encoded[i + 2]) : -1;
+		int d = (i + 3 < encoded.size()) ? Base64CharIndex(encoded[i + 3]) : -1;
+
+		if (a < 0 || b < 0) break;
+
+		decoded.push_back(static_cast<char>((a << 2) | (b >> 4)));
+		if (c >= 0) decoded.push_back(static_cast<char>(((b & 0x0F) << 4) | (c >> 2)));
+		if (d >= 0) decoded.push_back(static_cast<char>(((c & 0x03) << 6) | d));
 	}
-
-	return (static_cast<std::uint32_t>(buffer[0]) << 24) |
-		   (static_cast<std::uint32_t>(buffer[1]) << 16) |
-		   (static_cast<std::uint32_t>(buffer[2]) << 8) |
-		   static_cast<std::uint32_t>(buffer[3]);
-}
-
-std::uint64_t ReadUint64(std::istream& in) {
-	std::array<std::uint8_t, 8> buffer{};
-	in.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
-	if (!in) {
-		throw std::runtime_error("Falha ao ler uint64 do stream de origem.");
-	}
-
-	return (static_cast<std::uint64_t>(buffer[0]) << 56) |
-		   (static_cast<std::uint64_t>(buffer[1]) << 48) |
-		   (static_cast<std::uint64_t>(buffer[2]) << 40) |
-		   (static_cast<std::uint64_t>(buffer[3]) << 32) |
-		   (static_cast<std::uint64_t>(buffer[4]) << 24) |
-		   (static_cast<std::uint64_t>(buffer[5]) << 16) |
-		   (static_cast<std::uint64_t>(buffer[6]) << 8) |
-		   static_cast<std::uint64_t>(buffer[7]);
-}
-
-void WriteString(std::ostream& out, const std::string& value) {
-	if (value.size() > std::numeric_limits<std::uint32_t>::max()) {
-		throw std::runtime_error("String grande demais para serializacao (max uint32). ");
-	}
-
-	const auto length = static_cast<std::uint32_t>(value.size());
-	WriteUint32(out, length);
-
-	if (length == 0) {
-		return;
-	}
-
-	out.write(value.data(), static_cast<std::streamsize>(length));
-	if (!out) {
-		throw std::runtime_error("Falha ao escrever string no stream de destino.");
-	}
-}
-
-std::string ReadString(std::istream& in) {
-	const std::uint32_t length = ReadUint32(in);
-
-	if (length == 0) {
-		return {};
-	}
-
-	std::string value(length, '\0');
-	in.read(&value[0], static_cast<std::streamsize>(length));
-	if (!in) {
-		throw std::runtime_error("Falha ao ler string do stream de origem.");
-	}
-
-	return value;
+	return decoded;
 }
 
 } // namespace
 
+
+// ── File ──
+
 File::File()
-	: _id(0), _folder_id(0), _name(), _size_bytes(0), _content() {}
+	: StorageNode(), _folder_id(0), _size_bytes(0), _content() {}
 
 File::File(
 	std::uint64_t id,
 	std::uint64_t folder_id,
 	const std::string& name,
 	std::uint64_t size_bytes)
-	: _id(id), _folder_id(folder_id), _name(name), _size_bytes(size_bytes), _content() {}
+	: StorageNode(id, name), _folder_id(folder_id), _size_bytes(size_bytes), _content() {}
 
 File::File(
 	std::uint64_t id,
@@ -119,15 +84,7 @@ File::File(
 	const std::string& name,
 	std::uint64_t size_bytes,
 	std::vector<char> content)
-	: _id(id), _folder_id(folder_id), _name(name), _size_bytes(size_bytes), _content(std::move(content)) {}
-
-std::uint64_t File::getId() const {
-	return _id;
-}
-
-void File::setId(std::uint64_t id) {
-	_id = id;
-}
+	: StorageNode(id, name), _folder_id(folder_id), _size_bytes(size_bytes), _content(std::move(content)) {}
 
 std::uint64_t File::getFolderId() const {
 	return _folder_id;
@@ -135,14 +92,6 @@ std::uint64_t File::getFolderId() const {
 
 void File::setFolderId(std::uint64_t folder_id) {
 	_folder_id = folder_id;
-}
-
-const std::string& File::getName() const {
-	return _name;
-}
-
-void File::setName(const std::string& name) {
-	_name = name;
 }
 
 std::uint64_t File::getSizeBytes() const {
@@ -161,67 +110,27 @@ void File::setContent(std::vector<char> content) {
 	_content = std::move(content);
 }
 
-
-//FileOutputStream
-
-
-FileOutputStream::FileOutputStream(const File* files, std::size_t count, std::ostream& destination)
-	: _files(files), _count(count), _destination(destination) {
-	if (_count > 0 && _files == nullptr) {
-		throw std::invalid_argument("O array de File nao pode ser nulo quando count > 0.");
-	}
+nlohmann::json File::toJson() const {
+	return {
+		{"id", _id},
+		{"name", _name},
+		{"created_at", _created_at},
+		{"folder_id", _folder_id},
+		{"size_bytes", _size_bytes},
+		{"content_base64", Base64Encode(_content)}
+	};
 }
 
+void File::fromJson(const nlohmann::json& j) {
+	_id = j.at("id").get<std::uint64_t>();
+	_name = j.at("name").get<std::string>();
+	_created_at = j.value("created_at", std::uint64_t(0));
+	_folder_id = j.at("folder_id").get<std::uint64_t>();
+	_size_bytes = j.at("size_bytes").get<std::uint64_t>();
 
-void FileOutputStream::write() {
-	for (std::size_t i = 0; i < _count; ++i) {
-		WriteUint64(_destination, _files[i].getId());
-		WriteUint64(_destination, _files[i].getFolderId());
-		WriteString(_destination, _files[i].getName());
-		WriteUint64(_destination, _files[i].getSizeBytes());
-
-		const auto& content = _files[i].getContent();
-		if (!content.empty()) {
-			_destination.write(content.data(), static_cast<std::streamsize>(content.size()));
-			if (!_destination) {
-				throw std::runtime_error("Falha ao escrever conteudo do arquivo no stream de destino.");
-			}
-		}
+	if (j.contains("content_base64") && !j["content_base64"].get<std::string>().empty()) {
+		_content = Base64Decode(j["content_base64"].get<std::string>());
+	} else {
+		_content.clear();
 	}
-}
-
-
-//FIleInputStream
-
-
-FileInputStream::FileInputStream(std::istream& source)
-	: _source(source) {}
-
-std::vector<File> FileInputStream::readFiles(int count) {
-	if (count < 0) {
-		throw std::invalid_argument("count nao pode ser negativo.");
-	}
-
-	std::vector<File> files;
-	files.reserve(static_cast<std::size_t>(count));
-
-	for (int i = 0; i < count; ++i) {
-		const std::uint64_t id = ReadUint64(_source);
-		const std::uint64_t folder_id = ReadUint64(_source);
-		const std::string name = ReadString(_source);
-		const std::uint64_t size_bytes = ReadUint64(_source);
-
-		std::vector<char> content;
-		if (size_bytes > 0) {
-			content.resize(static_cast<std::size_t>(size_bytes));
-			_source.read(content.data(), static_cast<std::streamsize>(size_bytes));
-			if (!_source) {
-				throw std::runtime_error("Falha ao ler conteudo do arquivo do stream de origem.");
-			}
-		}
-
-		files.emplace_back(id, folder_id, name, size_bytes, std::move(content));
-	}
-
-	return files;
 }

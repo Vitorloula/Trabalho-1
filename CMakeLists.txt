@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.10)
 
-project(SaveBoxSockets LANGUAGES CXX)
+project(SaveBoxRMI LANGUAGES CXX)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -15,7 +15,12 @@ set(SAVEBOX_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/include)
 set(SAVEBOX_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 set(SHARED_SOURCES
+    ${SAVEBOX_SRC_DIR}/StorageNode.cpp
     ${SAVEBOX_SRC_DIR}/File.cpp
+    ${SAVEBOX_SRC_DIR}/Folder.cpp
+    ${SAVEBOX_SRC_DIR}/User.cpp
+    ${SAVEBOX_SRC_DIR}/Workspace.cpp
+    ${SAVEBOX_SRC_DIR}/IPCModule.cpp
     ${SAVEBOX_SRC_DIR}/Utils.cpp
 )
 
