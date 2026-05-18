@@ -125,7 +125,7 @@ void File::fromJson(const nlohmann::json& j) {
 	_id = j.at("id").get<std::uint64_t>();
 	_name = j.at("name").get<std::string>();
 	_created_at = j.value("created_at", std::uint64_t(0));
-	_folder_id = j.at("folder_id").get<std::uint64_t>();
+	_folder_id  = j.value("folder_id",  std::uint64_t(0));
 	_size_bytes = j.at("size_bytes").get<std::uint64_t>();
 
 	if (j.contains("content_base64") && !j["content_base64"].get<std::string>().empty()) {

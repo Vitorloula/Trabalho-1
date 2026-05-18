@@ -64,6 +64,6 @@ namespace SocketUtils {
 
     bool SendUdpMulticast(const std::string& groupAddress, std::uint16_t port, const std::string& payload);
     SocketType CreateUdpMulticastListener(const std::string& groupAddress, std::uint16_t port);
-    bool ReceiveDatagram(SocketType socket_fd, std::string& outPayload, int timeoutMs);
+    bool ReceiveDatagram(SocketType socket_fd, std::string& outPayload, std::string& outSenderIp, int timeoutMs);
 
 }

@@ -1,6 +1,7 @@
 #include "IPCModule.hpp"
 #include "json.hpp"
 
+#include <iostream>
 #include <stdexcept>
 #include <string>
 
@@ -117,11 +118,20 @@ std::string IPCModule::doOperation(const RemoteObjectRef& ref,
 	request.methodId       = methodId;
 	request.arguments      = arguments;
 
-	sendRaw(sock, SerializeMessage(request));
+	const std::string requestSerialized = SerializeMessage(request);
+	// ── Log de auditoria RMI ──
+	std::cout << "\n[RMI REQUEST ENVIADO] -> "
+	          << json::parse(requestSerialized).dump(2) << std::endl;
+
+	sendRaw(sock, requestSerialized);
 
 	// 3. Receber a resposta (Reply)
 	std::string replyRaw = recvRaw(sock);
 	RMIMessage reply = DeserializeMessage(replyRaw);
+
+	// ── Log de auditoria RMI ──
+	std::cout << "[RMI REPLY RECEBIDO]  <- "
+	          << json::parse(replyRaw).dump(2) << std::endl;
 
 	return reply.arguments;
 }

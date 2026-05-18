@@ -75,10 +75,13 @@ static std::string handleUploadFile(const json& args) {
 }
 
 
-static std::string handleListFiles(const json& /*args*/) {
+static std::string handleListFiles(const json& args) {
 	InitWorkspace();
 
-	// Também listar do disco caso existam arquivos salvos anteriormente
+	const std::string workspaceObjId = args.value("workspace_object_id", "");
+	std::cout << "[listFiles] workspace=" << workspaceObjId << std::endl;
+
+	// Listar do disco para incluir arquivos de sessões anteriores
 	const fs::path output_dir("./arquivos");
 	json filesJson = json::array();
 
@@ -86,13 +89,17 @@ static std::string handleListFiles(const json& /*args*/) {
 		std::uint64_t id = 1;
 		for (const auto& entry : fs::directory_iterator(output_dir)) {
 			if (entry.is_regular_file()) {
-				File f(id++, 0, entry.path().filename().string(),
-				       static_cast<std::uint64_t>(entry.file_size()));
-				filesJson.push_back(f.toJson());
+				// Retorna apenas metadados — sem conteúdo binário
+				filesJson.push_back({
+					{"id",         id++},
+					{"name",       entry.path().filename().string()},
+					{"size_bytes", static_cast<std::uint64_t>(entry.file_size())}
+				});
 			}
 		}
 	}
 
+	std::cout << "[listFiles] " << filesJson.size() << " arquivo(s) listado(s)." << std::endl;
 	return json({{"status", "OK"}, {"files", filesJson}}).dump();
 }
 
@@ -230,9 +237,10 @@ static bool RunAsBackup() {
 
 	auto last_heartbeat = std::chrono::steady_clock::now();
 	std::string msg;
+	std::string senderIp;
 
 	while (true) {
-		if (SocketUtils::ReceiveDatagram(udp, msg, 500)) {
+		if (SocketUtils::ReceiveDatagram(udp, msg, senderIp, 500)) {
 			if (msg.rfind("HEARTBEAT|", 0) == 0) {
 				last_heartbeat = std::chrono::steady_clock::now();
 			}

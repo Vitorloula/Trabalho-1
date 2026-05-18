@@ -119,8 +119,9 @@ namespace SocketUtils {
         return udp;
     }
 
-    bool ReceiveDatagram(SocketType socket_fd, std::string& outPayload, int timeoutMs) {
+    bool ReceiveDatagram(SocketType socket_fd, std::string& outPayload, std::string& outSenderIp, int timeoutMs) {
         outPayload.clear();
+        outSenderIp.clear();
         
         fd_set readSet;
         FD_ZERO(&readSet);
@@ -134,9 +135,17 @@ namespace SocketUtils {
         if (ready <= 0) return false;
 
         std::array<char, 4096> buffer{};
-        int received = recvfrom(socket_fd, buffer.data(), static_cast<int>(buffer.size() - 1), 0, nullptr, nullptr);
+        sockaddr_in senderAddr{};
+        socklen_t senderAddrLen = sizeof(senderAddr);
+        
+        int received = recvfrom(socket_fd, buffer.data(), static_cast<int>(buffer.size() - 1), 0, 
+                                reinterpret_cast<sockaddr*>(&senderAddr), &senderAddrLen);
         
         if (received <= 0) return false;
+        
+        char ipStr[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &senderAddr.sin_addr, ipStr, INET_ADDRSTRLEN);
+        outSenderIp = ipStr;
         
         buffer[static_cast<std::size_t>(received)] = '\0';
         outPayload.assign(buffer.data(), static_cast<std::size_t>(received));
