@@ -7,10 +7,6 @@
 
 using json = nlohmann::json;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Helpers internos — serialização da RMIMessage para JSON
-// ═══════════════════════════════════════════════════════════════════════════
-
 namespace {
 
 std::string SerializeMessage(const RMIMessage& msg) {
@@ -46,10 +42,6 @@ RMIMessage DeserializeMessage(const std::string& raw) {
 
 } // namespace
 
-// ═══════════════════════════════════════════════════════════════════════════
-// IPCModule — implementação
-// ═══════════════════════════════════════════════════════════════════════════
-
 IPCModule::IPCModule()
 	: _server_fd(kInvalidSocket), _nextRequestId(1) {}
 
@@ -58,8 +50,6 @@ IPCModule::~IPCModule() {
 		SocketUtils::CloseSocket(_server_fd);
 	}
 }
-
-// ── Helpers de framing: [4 bytes tamanho][payload] ──
 
 void IPCModule::sendRaw(SocketType fd, const std::string& data) {
 	SocketUtils::SendUint32(fd, static_cast<std::uint32_t>(data.size()));
@@ -83,12 +73,9 @@ std::string IPCModule::recvRaw(SocketType fd) {
 	return buffer;
 }
 
-// ── Lado Cliente (Proxy) ──
-
 std::string IPCModule::doOperation(const RemoteObjectRef& ref,
                                    const std::string& methodId,
                                    const std::string& arguments) {
-	// 1. Criar socket TCP e conectar ao servidor remoto
 	SocketType sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (sock == kInvalidSocket) {
 		throw std::runtime_error("IPCModule::doOperation — falha ao criar socket.");
@@ -110,7 +97,6 @@ std::string IPCModule::doOperation(const RemoteObjectRef& ref,
 			ref.ip + ":" + std::to_string(ref.port));
 	}
 
-	// 2. Montar e enviar a mensagem RMI (Request)
 	RMIMessage request;
 	request.messageType    = MessageType::Request;
 	request.requestId      = _nextRequestId++;
@@ -119,24 +105,18 @@ std::string IPCModule::doOperation(const RemoteObjectRef& ref,
 	request.arguments      = arguments;
 
 	const std::string requestSerialized = SerializeMessage(request);
-	// ── Log de auditoria RMI ──
 	std::cout << "\n[RMI REQUEST ENVIADO] -> "
 	          << json::parse(requestSerialized).dump(2) << std::endl;
 
 	sendRaw(sock, requestSerialized);
-
-	// 3. Receber a resposta (Reply)
 	std::string replyRaw = recvRaw(sock);
 	RMIMessage reply = DeserializeMessage(replyRaw);
 
-	// ── Log de auditoria RMI ──
 	std::cout << "[RMI REPLY RECEBIDO]  <- "
 	          << json::parse(replyRaw).dump(2) << std::endl;
 
 	return reply.arguments;
 }
-
-// ── Lado Servidor (Dispatcher) ──
 
 void IPCModule::initServer(int port) {
 	_server_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);

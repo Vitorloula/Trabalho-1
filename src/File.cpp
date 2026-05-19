@@ -3,8 +3,6 @@
 #include <stdexcept>
 #include <vector>
 
-// ── Base64 helpers (para serializar conteúdo binário em JSON) ──
-
 namespace {
 
 static const char kBase64Chars[] =
@@ -63,10 +61,6 @@ std::vector<char> Base64Decode(const std::string& encoded) {
 	return decoded;
 }
 
-} // namespace
-
-
-// ── File ──
 
 File::File()
 	: StorageNode(), _folder_id(0), _size_bytes(0), _content() {}

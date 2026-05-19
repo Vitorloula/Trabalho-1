@@ -21,15 +21,6 @@
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 
-
-// ═══════════════════════════════════════════════════════════════════════════
-// SaveBoxProxy — Proxy RMI (camada de aplicação do cliente)
-//
-// Cada método serializa seus argumentos em JSON, invoca
-// ipc.doOperation() e desserializa a resposta. Em nenhum
-// momento o Proxy (ou o main) enxerga sockets.
-// ═══════════════════════════════════════════════════════════════════════════
-
 class SaveBoxProxy {
 public:
 	SaveBoxProxy(int serverPort)
@@ -39,9 +30,6 @@ public:
 		_serverRef.objectId = "SaveBoxServer";
 	}
 
-	// ────────────────────────────────────────────────────────────
-	// Descoberta automática do servidor via Multicast (3 tentativas)
-	// ────────────────────────────────────────────────────────────
 	std::string discoverServerIp() {
 		std::cout << "Procurando servidor na rede (Multicast)..." << std::endl;
 
@@ -58,7 +46,6 @@ public:
 
 		for (int attempt = 1; attempt <= 3; ++attempt) {
 			auto startTime = std::chrono::steady_clock::now();
-			// Aguarda até 2 segundos por tentativa (heartbeat é a cada 1 seg)
 			while (std::chrono::steady_clock::now() - startTime < std::chrono::seconds(2)) {
 				if (SocketUtils::ReceiveDatagram(udp, msg, senderIp, 500)) {
 					if (msg.find("HEARTBEAT|LIDER") == 0) {
@@ -73,10 +60,6 @@ public:
 		throw std::runtime_error("Servidor nao encontrado apos 3 tentativas.");
 	}
 
-	// ────────────────────────────────────────────────────────────
-	// 1. getWorkspaceRef — Passagem por REFERÊNCIA
-	//    Retorna um RemoteObjectRef que identifica o workspace remoto
-	// ────────────────────────────────────────────────────────────
 	RemoteObjectRef getWorkspaceRef(std::uint64_t userId) {
 		json args;
 		args["user_id"] = userId;
@@ -91,10 +74,6 @@ public:
 		return ref;
 	}
 
-	// ────────────────────────────────────────────────────────────
-	// 2. uploadFile — Passagem por VALOR
-	//    Serializa o objeto File inteiro (metadados + conteúdo em Base64)
-	// ────────────────────────────────────────────────────────────
 	std::string uploadFile(const RemoteObjectRef& workspaceRef, const File& f) {
 		json args;
 		args["workspace_object_id"] = workspaceRef.objectId;
@@ -105,9 +84,6 @@ public:
 		return reply.value("message", reply.value("status", "OK"));
 	}
 
-	// ────────────────────────────────────────────────────────────
-	// 3. listFiles — retorna metadados dos arquivos do workspace
-	// ────────────────────────────────────────────────────────────
 	std::vector<File> listFiles(const RemoteObjectRef& workspaceRef) {
 		json args;
 		args["workspace_object_id"] = workspaceRef.objectId;
@@ -126,9 +102,6 @@ public:
 		return files;
 	}
 
-	// ────────────────────────────────────────────────────────────
-	// 4. deleteFile — Passagem por VALOR (ID simples)
-	// ────────────────────────────────────────────────────────────
 	std::string deleteFile(std::uint64_t fileId) {
 		json args;
 		args["file_id"] = fileId;
@@ -143,10 +116,6 @@ private:
 	RemoteObjectRef _serverRef;
 };
 
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Funções auxiliares do cliente
-// ═══════════════════════════════════════════════════════════════════════════
 
 static std::string SelectFile() {
 #ifdef _WIN32
@@ -192,17 +161,12 @@ static void PrintMenu(const RemoteObjectRef& wsRef, std::uint64_t userId) {
 }
 
 
-// ═══════════════════════════════════════════════════════════════════════════
-// main — O cliente NÃO enxerga sockets, apenas usa o SaveBoxProxy
-// ═══════════════════════════════════════════════════════════════════════════
-
 int main() {
 	try {
 		#ifdef _WIN32
 			SocketUtils::WinsockContext winsock_context;
 		#endif
 
-		// ── Identificação do Usuário ──────────────────────────────────────
 		PrintSeparator('*');
 		std::cout << "  Bem-vindo ao SaveBox!\n";
 		PrintSeparator('*');
@@ -212,16 +176,13 @@ int main() {
 		std::cin >> userId;
 		std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
 
-		// ── Descoberta e conexão ao servidor ─────────────────────────────
 		SaveBoxProxy proxy(8080);
 
-		// ── Obter referência remota ao workspace (passagem por referência) ─
 		std::cout << "\nObtendo referencia remota ao workspace..." << std::endl;
 		RemoteObjectRef wsRef = proxy.getWorkspaceRef(userId);
 		std::cout << "Workspace: " << wsRef.objectId
 		          << "  [" << wsRef.ip << ":" << wsRef.port << "]\n";
 
-		// ── Loop do menu interativo ────────────────────────────────────────
 		while (true) {
 			PrintMenu(wsRef, userId);
 
@@ -230,7 +191,6 @@ int main() {
 			std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
 
 			if (opcao == 1) {
-				// ── Upload de arquivo ──────────────────────────────────────
 				const std::string filepath = SelectFile();
 				if (filepath.empty()) {
 					std::cout << "  Nenhum arquivo selecionado.\n";
@@ -275,7 +235,6 @@ int main() {
 				std::cout << "  Servidor: " << result << "\n";
 
 			} else if (opcao == 2) {
-				// ── Listagem de arquivos ───────────────────────────────────
 				std::cout << "  Consultando servidor...\n";
 				auto files = proxy.listFiles(wsRef);
 
@@ -302,7 +261,6 @@ int main() {
 				PrintSeparator('-');
 
 			} else if (opcao == 3) {
-				// ── Sair ──────────────────────────────────────────────────
 				std::cout << "  Encerrando SaveBox!\n";
 				PrintSeparator('*');
 				break;
