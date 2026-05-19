@@ -1,5 +1,7 @@
 #include "File.hpp"
-#include "Utils.hpp"
+#include "Workspace.hpp"
+#include "IPCModule.hpp"
+#include "json.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -7,10 +9,8 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
-#include <sstream>
 #include <stdexcept>
 #include <string>
-#include <thread>
 #include <vector>
 
 #ifdef _WIN32
@@ -19,9 +19,103 @@
 #endif
 
 namespace fs = std::filesystem;
+using json = nlohmann::json;
 
-static constexpr int kMaxRetries = 5;
-static constexpr int kRetryDelaySeconds = 2;
+class SaveBoxProxy {
+public:
+	SaveBoxProxy(int serverPort)
+		: _ipc() {
+		_serverRef.ip = discoverServerIp();
+		_serverRef.port = serverPort;
+		_serverRef.objectId = "SaveBoxServer";
+	}
+
+	std::string discoverServerIp() {
+		std::cout << "Procurando servidor na rede (Multicast)..." << std::endl;
+
+		SocketType udp = SocketUtils::CreateUdpMulticastListener(
+			SocketUtils::kMulticastGroup, SocketUtils::kMulticastPort);
+
+		if (udp == kInvalidSocket) {
+			throw std::runtime_error("Falha ao criar listener multicast para descoberta.");
+		}
+		SocketUtils::SocketGuard guard(udp);
+
+		std::string msg;
+		std::string senderIp;
+
+		for (int attempt = 1; attempt <= 3; ++attempt) {
+			auto startTime = std::chrono::steady_clock::now();
+			while (std::chrono::steady_clock::now() - startTime < std::chrono::seconds(2)) {
+				if (SocketUtils::ReceiveDatagram(udp, msg, senderIp, 500)) {
+					if (msg.find("HEARTBEAT|LIDER") == 0) {
+						std::cout << "Servidor encontrado em: " << senderIp << std::endl;
+						return senderIp;
+					}
+				}
+			}
+			std::cout << "Tentativa " << attempt << "/3: Servidor nao encontrado." << std::endl;
+		}
+
+		throw std::runtime_error("Servidor nao encontrado apos 3 tentativas.");
+	}
+
+	RemoteObjectRef getWorkspaceRef(std::uint64_t userId) {
+		json args;
+		args["user_id"] = userId;
+
+		std::string replyJson = _ipc.doOperation(_serverRef, "getWorkspaceRef", args.dump());
+		json reply = json::parse(replyJson);
+
+		RemoteObjectRef ref;
+		ref.ip       = reply.at("ip").get<std::string>();
+		ref.port     = reply.at("port").get<int>();
+		ref.objectId = reply.at("objectId").get<std::string>();
+		return ref;
+	}
+
+	std::string uploadFile(const RemoteObjectRef& workspaceRef, const File& f) {
+		json args;
+		args["workspace_object_id"] = workspaceRef.objectId;
+		args["file"] = f.toJson();
+
+		std::string replyJson = _ipc.doOperation(_serverRef, "uploadFile", args.dump());
+		json reply = json::parse(replyJson);
+		return reply.value("message", reply.value("status", "OK"));
+	}
+
+	std::vector<File> listFiles(const RemoteObjectRef& workspaceRef) {
+		json args;
+		args["workspace_object_id"] = workspaceRef.objectId;
+
+		std::string replyJson = _ipc.doOperation(_serverRef, "listFiles", args.dump());
+		json reply = json::parse(replyJson);
+
+		std::vector<File> files;
+		if (reply.contains("files")) {
+			for (const auto& fj : reply["files"]) {
+				File f;
+				f.fromJson(fj);
+				files.push_back(std::move(f));
+			}
+		}
+		return files;
+	}
+
+	std::string deleteFile(std::uint64_t fileId) {
+		json args;
+		args["file_id"] = fileId;
+
+		std::string replyJson = _ipc.doOperation(_serverRef, "deleteFile", args.dump());
+		json reply = json::parse(replyJson);
+		return reply.value("status", "OK");
+	}
+
+private:
+	IPCModule _ipc;
+	RemoteObjectRef _serverRef;
+};
+
 
 static std::string SelectFile() {
 #ifdef _WIN32
@@ -37,60 +131,33 @@ static std::string SelectFile() {
 	ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
 
 	if (!GetOpenFileNameA(&ofn)) {
-		std::cout << "Nenhum arquivo selecionado. Encerrando." << std::endl;
-		std::exit(0);
+		return "";  // usuário cancelou
 	}
 
 	return std::string(filename);
 #else
 	std::string filepath;
-	std::cout << "Digite o caminho do arquivo a enviar: ";
+	std::cout << "Digite o caminho do arquivo: ";
 	std::getline(std::cin, filepath);
-
-	if (filepath.empty()) {
-		std::cout << "Nenhum arquivo informado. Encerrando." << std::endl;
-		std::exit(0);
-	}
-
 	return filepath;
 #endif
 }
 
-static SocketType ConnectWithRetry(const char* server_ip, std::uint16_t port) {
-	for (int attempt = 1; attempt <= kMaxRetries; ++attempt) {
-		SocketType sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-		if (sock == kInvalidSocket) {
-			throw std::runtime_error("Falha ao criar socket TCP do cliente.");
-		}
+static void PrintSeparator(char c = '=', int width = 55) {
+	std::cout << std::string(width, c) << std::endl;
+}
 
-		sockaddr_in server_addr{};
-		server_addr.sin_family = AF_INET;
-		server_addr.sin_port = htons(port);
-
-		if (inet_pton(AF_INET, server_ip, &server_addr.sin_addr) <= 0) {
-			SocketUtils::CloseSocket(sock);
-			throw std::runtime_error("Falha ao converter o IP do servidor.");
-		}
-
-		if (connect(sock, reinterpret_cast<const sockaddr*>(&server_addr),
-					static_cast<int>(sizeof(server_addr))) == 0) {
-			std::cout << "Conectado ao servidor " << server_ip << ":" << port << std::endl;
-			return sock;
-		}
-
-		SocketUtils::CloseSocket(sock);
-
-		if (attempt < kMaxRetries) {
-			std::cerr << "Tentativa " << attempt << "/" << kMaxRetries
-					  << " falhou. Tentando novamente em " << kRetryDelaySeconds << "s..."
-					  << std::endl;
-			std::this_thread::sleep_for(std::chrono::seconds(kRetryDelaySeconds));
-		}
-	}
-
-	throw std::runtime_error(
-		"Falha ao conectar em " + std::string(server_ip) + ":" +
-		std::to_string(port) + " apos " + std::to_string(kMaxRetries) + " tentativas.");
+static void PrintMenu(const RemoteObjectRef& wsRef, std::uint64_t userId) {
+	std::cout << "\n";
+	PrintSeparator();
+	std::cout << "  SAVEBOX — Usuario ID: " << userId << "\n";
+	std::cout << "  Workspace: " << wsRef.objectId << "\n";
+	PrintSeparator();
+	std::cout << "  1. Fazer Upload de Arquivo\n";
+	std::cout << "  2. Listar Arquivos do Workspace\n";
+	std::cout << "  3. Sair\n";
+	PrintSeparator();
+	std::cout << "  Opcao: ";
 }
 
 
@@ -100,69 +167,109 @@ int main() {
 			SocketUtils::WinsockContext winsock_context;
 		#endif
 
-		const std::string filepath = SelectFile();
+		PrintSeparator('*');
+		std::cout << "  Bem-vindo ao SaveBox!\n";
+		PrintSeparator('*');
 
-		const fs::path file_path(filepath);
-		if (!fs::exists(file_path) || !fs::is_regular_file(file_path)) {
-			throw std::runtime_error("Arquivo nao encontrado ou nao e um arquivo regular: " + filepath);
-		}
+		std::cout << "  Digite seu ID de usuario: ";
+		std::uint64_t userId = 0;
+		std::cin >> userId;
+		std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
 
-		const std::string file_name = file_path.filename().string();
-		const std::uint64_t file_size = static_cast<std::uint64_t>(fs::file_size(file_path));
+		SaveBoxProxy proxy(8080);
 
-		std::cout << "Arquivo: " << file_name << " (" << file_size << " bytes)" << std::endl;
+		std::cout << "\nObtendo referencia remota ao workspace..." << std::endl;
+		RemoteObjectRef wsRef = proxy.getWorkspaceRef(userId);
+		std::cout << "Workspace: " << wsRef.objectId
+		          << "  [" << wsRef.ip << ":" << wsRef.port << "]\n";
 
-		std::ifstream ifs(file_path, std::ios::binary);
-		if (!ifs) {
-			throw std::runtime_error("Falha ao abrir o arquivo: " + filepath);
-		}
+		while (true) {
+			PrintMenu(wsRef, userId);
 
-		std::vector<char> content(static_cast<std::size_t>(file_size));
-		if (file_size > 0) {
-			ifs.read(content.data(), static_cast<std::streamsize>(file_size));
-			if (!ifs) {
-				throw std::runtime_error("Falha ao ler o conteudo do arquivo: " + filepath);
+			int opcao = 0;
+			std::cin >> opcao;
+			std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+
+			if (opcao == 1) {
+				const std::string filepath = SelectFile();
+				if (filepath.empty()) {
+					std::cout << "  Nenhum arquivo selecionado.\n";
+					continue;
+				}
+
+				const fs::path file_path(filepath);
+				if (!fs::exists(file_path) || !fs::is_regular_file(file_path)) {
+					std::cerr << "  Erro: arquivo nao encontrado: " << filepath << "\n";
+					continue;
+				}
+
+				const std::string file_name = file_path.filename().string();
+				const std::uint64_t file_size =
+					static_cast<std::uint64_t>(fs::file_size(file_path));
+
+				std::cout << "  Arquivo: " << file_name
+				          << " (" << file_size << " bytes)\n";
+
+				std::ifstream ifs(file_path, std::ios::binary);
+				if (!ifs) {
+					std::cerr << "  Erro: falha ao abrir arquivo.\n";
+					continue;
+				}
+
+				std::vector<char> content(static_cast<std::size_t>(file_size));
+				if (file_size > 0) {
+					ifs.read(content.data(),
+					         static_cast<std::streamsize>(file_size));
+					if (!ifs) {
+						std::cerr << "  Erro: falha ao ler arquivo.\n";
+						continue;
+					}
+				}
+				ifs.close();
+
+				File file_to_upload(userId, 0, file_name, file_size,
+				                    std::move(content));
+
+				std::cout << "  Enviando...\n";
+				std::string result = proxy.uploadFile(wsRef, file_to_upload);
+				std::cout << "  Servidor: " << result << "\n";
+
+			} else if (opcao == 2) {
+				std::cout << "  Consultando servidor...\n";
+				auto files = proxy.listFiles(wsRef);
+
+				std::cout << "\n";
+				PrintSeparator('-');
+				std::cout << "  Arquivos no workspace (" << files.size() << "):\n";
+				PrintSeparator('-');
+
+				if (files.empty()) {
+					std::cout << "  (nenhum arquivo encontrado)\n";
+				} else {
+					std::cout << "  " << std::left
+					          << std::setw(6) << "ID"
+					          << std::setw(32) << "Nome"
+					          << "Tamanho\n";
+					PrintSeparator('-');
+					for (const auto& f : files) {
+						std::cout << "  " << std::left
+						          << std::setw(6)  << f.getId()
+						          << std::setw(32) << f.getName()
+						          << f.getSizeBytes() << " bytes\n";
+					}
+				}
+				PrintSeparator('-');
+
+			} else if (opcao == 3) {
+				std::cout << "  Encerrando SaveBox!\n";
+				PrintSeparator('*');
+				break;
+
+			} else {
+				std::cout << "  Opcao invalida. Tente novamente.\n";
 			}
 		}
-		ifs.close();
 
-		SocketUtils::SocketGuard client_socket(
-			ConnectWithRetry(SocketUtils::kServerIp, SocketUtils::kPort));
-
-		std::vector<File> files = {
-			File(1, 0, file_name, file_size, std::move(content))};
-
-		std::stringstream payload_stream(std::ios::in | std::ios::out | std::ios::binary);
-		FileOutputStream file_output_stream(files.data(), files.size(), payload_stream);
-		file_output_stream.write();
-
-		const std::string payload = payload_stream.str();
-
-		if (files.size() > std::numeric_limits<std::uint32_t>::max()) {
-			throw std::runtime_error("Quantidade de arquivos excede uint32.");
-		}
-
-		if (payload.size() > std::numeric_limits<std::uint32_t>::max()) {
-			throw std::runtime_error("Payload excede tamanho maximo de uint32.");
-		}
-
-		SocketUtils::SendUint32(client_socket.get(), static_cast<std::uint32_t>(files.size()));
-		SocketUtils::SendUint32(client_socket.get(), static_cast<std::uint32_t>(payload.size()));
-
-		if (!payload.empty() &&
-			!SocketUtils::SendAll(client_socket.get(), payload.data(), payload.size())) {
-			throw std::runtime_error("Falha ao enviar payload serializado.");
-		}
-
-		const std::uint32_t reply_size = SocketUtils::ReceiveUint32(client_socket.get());
-		std::string reply(reply_size, '\0');
-
-		if (reply_size > 0 &&
-			!SocketUtils::RecvAll(client_socket.get(), &reply[0], reply.size())) {
-			throw std::runtime_error("Falha ao receber resposta do servidor.");
-		}
-
-		std::cout << "Resposta do servidor: " << reply << std::endl;
 		return 0;
 	} catch (const std::exception& ex) {
 		std::cerr << "Erro no cliente: " << ex.what() << std::endl;

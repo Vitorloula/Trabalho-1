@@ -1,74 +1,75 @@
-# Relatório de Avaliação Técnica: Sockets e Streams em C++
+# Relatório de Avaliação Técnica: Implementação de RMI (Remote Method Invocation) em C++
 
 **Disciplina:** Sistemas Distribuídos  
-**Trabalho 1**
+**Trabalho 2:** Remote Method Invocation (RMI)
 **Alunos:** Linyker Vinicius Gomes Barbosa (556280), Vitor Loula Silva (540622)
 
 ---
 
 ## 1. Resumo do Projeto
 
-O projeto implementa um sistema de **Sincronização Distribuída de Arquivos** fundamentado na arquitetura Líder-Backup. O sistema foca na robustez do transporte de dados via TCP para comunicação cliente-servidor e na eficiência do protocolo UDP Multicast para replicação de estado e _heartbeating_ entre servidores.
+O presente projeto expande o contexto do sistema de Sincronização Distribuída de Arquivos (desenvolvido no Trabalho 1), substituindo a comunicação manual via sockets por uma arquitetura robusta de **Invocação Remota de Método (RMI)**. O sistema foi integralmente remodelado para adotar um protocolo estrito de **requisição-resposta** (Request-Reply Protocol). 
 
-O fluxo básico consiste em um Cliente selecionando um arquivo, que é serializado e enviado ao Líder. O Líder processa a requisição, salva o arquivo localmente e propaga a notificação de sincronização para os Backups via Multicast.
-
----
-
-## 2. Modelagem de Dados e Protocolo
-
-A base da comunicação reside na serialização de objetos de domínio. Foram implementadas classes de dados que garantem a integridade da informação em trânsito.
-
-### Entidades Core
-
-- **`File`**: Encapsula metadados (ID, FolderID, Nome, Tamanho) e o payload binário (`std::vector<char>`).
-- **`Folder`**: Define o agrupamento lógico para a organização dos arquivos (ID, ParentID, Nome).
+A aplicação foi desenvolvida em **C++17**, garantindo que as regras de negócio sejam isoladas dos detalhes de transporte de rede, encapsulados em um módulo de IPC (Inter-Process Communication).
 
 ---
 
-## 3. Arquitetura de Streams Customizados
+## 2. Requisitos Estruturais Atendidos
 
-Para atender aos requisitos de abstração de E/S, o projeto utiliza o polimorfismo de streams do C++, permitindo que a lógica de negócio ignore a origem ou destino físico dos dados através das classes base `std::ostream` e `std::istream`.
+O modelo de domínio e os componentes RMI foram rigorosamente estruturados para preencher as exigências estipuladas.
 
-### 3.1 Camada de Saída (`FileOutputStream`)
+### 2.1 Entidades (Mínimo de 4 classes)
+O domínio de dados possui 5 entidades principais:
+1. **`StorageNode`**: Classe base abstrata para nós de armazenamento.
+2. **`File`**: Representa um arquivo físico e seus metadados.
+3. **`Folder`**: Representa uma pasta/diretório de organização.
+4. **`User`**: Representa os dados do usuário.
+5. **`Workspace`**: Representa a área de trabalho do usuário que gerencia múltiplos arquivos.
 
-A classe `FileOutputStream` implementa a serialização personalizada. Ao receber um `std::ostream&`, ela injeta os dados de um ou mais objetos `File` no fluxo:
+### 2.2 Composições do Tipo Extensão - "É-um" (Mínimo de 2)
+Implementado via herança base em C++:
+1. `File` **estende** (`public`) `StorageNode`.
+2. `Folder` **estende** (`public`) `StorageNode`.
 
-- **Metadados:** IDs e tamanhos são gravados como tipos de largura fixa.
-- **Flexibilidade:** Pode ser direcionada para `std::cout` (depuração), `std::ofstream` (persistência em disco) ou `std::stringstream` (bufferização para rede).
-
-### 3.2 Camada de Entrada (`FileInputStream`)
-
-Inversamente, a `FileInputStream` consome um `std::istream&`. A leitura é estruturada para reconstruir os objetos de forma segura:
-
-- **Recuperação de Tipos:** Lê metadados na ordem inversa da escrita.
-- **Segurança de Memória:** O conteúdo do arquivo é alocado dinamicamente via `std::vector` somente após a leitura do metadado de tamanho, prevenindo acessos inválidos.
-
----
-
-## 4. Implementação de Sockets e Serialização
-
-Diferente de bibliotecas de terceiros (como Protocol Buffers ou JSON), optou-se pela serialização manual para demonstrar o controle sobre o layout de memória:
-
-### Serialização Manual (Pack/Unpack)
-
-1.  **Metadados de Controle:** Antes do payload, o sistema envia a quantidade de arquivos e o tamanho total do pacote como `uint32_t` (Big-Endian compatível via headers de rede).
-2.  **Payload Binário:** Os dados dos objetos `File` são transmitidos de forma contígua para maximizar o _throughput_ do socket.
-
-### Comunicação TCP
-
-O servidor opera em modo `RunAsLeader` gerenciando o ciclo de vida das conexões:
-
-- **Handshake/Protocolo:** O cliente envia o `count` e o `payload_size`, seguidos pelos dados reais.
-- **Resposta:** O servidor confirma o recebimento com uma mensagem textual ("Arquivos recebidos com sucesso!").
+### 2.3 Composições do Tipo Agregação - "Tem-um" (Mínimo de 2)
+A classe `Workspace` compõe estruturalmente outras entidades:
+1. `Workspace` **tem-um** `User` (representando o `_owner` - dono da área de trabalho).
+2. `Workspace` **tem-uma** lista de `File` (`std::vector<File> _files`).
 
 ---
 
-## 5. Multicast e Alta Disponibilidade
+## 3. Arquitetura do Cliente (Proxy)
 
-O diferencial técnico do projeto é a implementação da camada de coordenação via UDP Multicast (endereço `239.0.0.1`, porta `9000`) para garantir a sobrevivência do serviço.
+A camada de cliente atua solicitando serviços remotamente de forma transparente. O transporte (TCP) foi abstraído pelo padrão **Proxy** através da classe `IPCModule`, encapsulando a serialização em formato **JSON** (via `nlohmann::json`) como Representação Externa de Dados.
 
-### Mecanismos de Consistência
+### 3.1 Funções Core do Cliente
+- **`doOperation(RemoteObjectRef o, std::string methodId, std::string arguments)`**: Único ponto de contato da aplicação cliente com a rede. Serializa uma mensagem de requisição, envia ao servidor, bloqueia a _thread_ aguardando, e converte o payload JSON retornado pela resposta.
 
-- **Heartbeat Progressivo:** O Líder emite sinais vitais a cada 1 segundo. Se um Backup detectar a ausência de sinal por mais de **3 segundos**, ele inicia o procedimento de _failover_.
-- **Eleição de Líder:** O primeiro Backup que conseguir realizar o `bind()` na porta TCP `8080` após a falha do Líder assume o papel de novo coordenador.
-- **Replicação de Estado (Sync):** Toda alteração confirmada no Líder gera uma mensagem `SYNC|ID,Nome` via Multicast, permitindo que os Backups mantenham seus índices de arquivos atualizados.
+### 3.2 Passagem por Valor e Referência (Visão do Cliente)
+- **Passagem por Valor**: Ao realizar upload de arquivos (`uploadFile`), o cliente envia uma cópia integral (parâmetros e dados binários) do objeto `File` no payload JSON.
+- **Passagem por Referência**: Ao solicitar o contexto da área de trabalho, o cliente não recebe o objeto `Workspace` pesando na rede. Em vez disso, ele recebe uma estrutura `RemoteObjectRef` que aponta para a entidade no servidor (IP, porta e `objectId`).
+
+---
+
+## 4. Arquitetura do Servidor (Dispatcher)
+
+O servidor RMI atua no padrão **Dispatcher**, operando o laço de recebimento de requisições, interpretação (unmarshalling) e despacho para o método de negócio correto (em `Server.cpp`).
+
+### 4.1 Funções Core do Servidor
+No lado do servidor, a classe `IPCModule` expõe os métodos exigidos (adaptados para a API de Sockets C++):
+- **`getRequest()`**: Ouve as conexões ativas na porta vinculada e extrai integralmente o pacote JSON da requisição, retornando também o _Socket_ cliente.
+- **`sendReply(SocketType client_fd, const std::string& replyJson)`**: Transforma os dados de saída, formata o pacote de sucesso/erro e devolve a resposta final ao cliente, encerrando a conexão correspondente.
+
+### 4.2 Métodos Remotos de Negócio (Mínimo de 4)
+O servidor RMI mapeia **quatro (4)** procedimentos expostos. A partir do `methodId` contido no pacote, o servidor resolve a execução para:
+
+1. **`uploadFile`**: Instancia um objeto abstrato `File` a partir dos argumentos (recebidos por **valor** via JSON) e grava seu conteúdo físico no disco da máquina servidora.
+2. **`listFiles`**: Recebe a identificação de um _Workspace_ específico e extrai a relação de arquivos vinculados a ele para retornar ao solicitante.
+3. **`deleteFile`**: Comando para destruir localmente no servidor o binário e a referência que corresponde ao arquivo indicado.
+4. **`getWorkspaceRef`**: Retorna um contexto abstrato. Demonstra fisicamente a **passagem por referência** construindo e repassando o ponteiro de localização lógica do objeto no servidor (representado pela estrutura `RemoteObjectRef`).
+
+---
+
+## 5. Conclusão da Refatoração
+
+Esta versão satisfaz completamente as exigências para o **Trabalho 2**. A lógica de sincronização (incluindo o _Heartbeat_ e _failover_) permaneceu íntegra, porém totalmente livre de lógica direta de Socket nas operações da aplicação. A divisão Proxy e Dispatcher viabilizou uma abstração de Invocação de Método Remoto polida e aderente aos padrões literários do ramo.
