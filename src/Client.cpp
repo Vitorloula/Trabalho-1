@@ -108,7 +108,7 @@ public:
 
 		std::string replyJson = _ipc.doOperation(_serverRef, "deleteFile", args.dump());
 		json reply = json::parse(replyJson);
-		return reply.value("status", "OK");
+		return reply.value("message", reply.value("status", "OK"));
 	}
 
 private:
@@ -155,7 +155,8 @@ static void PrintMenu(const RemoteObjectRef& wsRef, std::uint64_t userId) {
 	PrintSeparator();
 	std::cout << "  1. Fazer Upload de Arquivo\n";
 	std::cout << "  2. Listar Arquivos do Workspace\n";
-	std::cout << "  3. Sair\n";
+	std::cout << "  3. Excluir Arquivo\n";
+	std::cout << "  4. Sair\n";
 	PrintSeparator();
 	std::cout << "  Opcao: ";
 }
@@ -261,6 +262,16 @@ int main() {
 				PrintSeparator('-');
 
 			} else if (opcao == 3) {
+				std::cout << "  Digite o ID do arquivo a ser excluido: ";
+				std::uint64_t fileIdToDelete = 0;
+				std::cin >> fileIdToDelete;
+				std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+				
+				std::cout << "  Enviando solicitacao de exclusao...\n";
+				std::string deleteResult = proxy.deleteFile(fileIdToDelete);
+				std::cout << "  Servidor: " << deleteResult << "\n";
+
+			} else if (opcao == 4) {
 				std::cout << "  Encerrando SaveBox!\n";
 				PrintSeparator('*');
 				break;

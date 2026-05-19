@@ -31,6 +31,6 @@ public:
 private:
 	std::uint64_t _id;
 	std::string _name;
-	User _owner;                // Agregação 1: Workspace TEM-UM User
-	std::vector<File> _files;   // Agregação 2: Workspace TEM-UMA lista de Files
+	User _owner;                
+	std::vector<File> _files;  
 };

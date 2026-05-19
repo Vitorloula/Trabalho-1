@@ -9,6 +9,8 @@ using json = nlohmann::json;
 
 namespace {
 
+// Serialização / Desserialização da RMIMessage
+
 std::string SerializeMessage(const RMIMessage& msg) {
 	json j;
 	j["messageType"] = static_cast<int>(msg.messageType);
@@ -40,7 +42,8 @@ RMIMessage DeserializeMessage(const std::string& raw) {
 	return msg;
 }
 
-} // namespace
+}
+
 
 IPCModule::IPCModule()
 	: _server_fd(kInvalidSocket), _nextRequestId(1) {}
@@ -72,6 +75,9 @@ std::string IPCModule::recvRaw(SocketType fd) {
 	}
 	return buffer;
 }
+
+
+// Proxy
 
 std::string IPCModule::doOperation(const RemoteObjectRef& ref,
                                    const std::string& methodId,
@@ -117,6 +123,11 @@ std::string IPCModule::doOperation(const RemoteObjectRef& ref,
 
 	return reply.arguments;
 }
+
+
+
+// Dispatcher
+
 
 void IPCModule::initServer(int port) {
 	_server_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);

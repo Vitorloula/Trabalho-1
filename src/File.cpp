@@ -61,6 +61,7 @@ std::vector<char> Base64Decode(const std::string& encoded) {
 	return decoded;
 }
 
+} // namespace
 
 File::File()
 	: StorageNode(), _folder_id(0), _size_bytes(0), _content() {}

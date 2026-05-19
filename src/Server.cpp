@@ -19,10 +19,6 @@ namespace fs = std::filesystem;
 using json = nlohmann::json;
 
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Estado simulado do servidor (in-memory)
-// ═══════════════════════════════════════════════════════════════════════════
-
 static Workspace g_workspace;
 static bool g_workspaceInitialized = false;
 
@@ -30,14 +26,25 @@ static void InitWorkspace() {
 	if (!g_workspaceInitialized) {
 		User owner(1, "admin", "admin@savebox.com");
 		g_workspace = Workspace(1, "MainWorkspace", owner);
+		
+		const fs::path output_dir("./arquivos");
+		if (fs::exists(output_dir) && fs::is_directory(output_dir)) {
+			std::uint64_t id = 1;
+			for (const auto& entry : fs::directory_iterator(output_dir)) {
+				if (entry.is_regular_file()) {
+					File f(id++, 0, entry.path().filename().string(),
+					       static_cast<std::uint64_t>(entry.file_size()));
+					g_workspace.addFile(f);
+				}
+			}
+		}
+		
 		g_workspaceInitialized = true;
 	}
 }
 
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Handlers dos métodos remotos (lógica de aplicação do servidor)
-// ═══════════════════════════════════════════════════════════════════════════
+// Handlers
 
 static std::string handleUploadFile(const json& args) {
 	InitWorkspace();
@@ -45,7 +52,6 @@ static std::string handleUploadFile(const json& args) {
 	File f;
 	f.fromJson(args.at("file"));
 
-	// Salvar no disco
 	const fs::path output_dir("./arquivos");
 	fs::create_directories(output_dir);
 
@@ -64,8 +70,8 @@ static std::string handleUploadFile(const json& args) {
 	}
 	ofs.close();
 
-	// Registrar no workspace (sem conteúdo binário para economia de memória)
-	File meta(f.getId(), f.getFolderId(), f.getName(), f.getSizeBytes());
+	std::uint64_t newFileId = g_workspace.getFiles().size() + 1;
+	File meta(newFileId, f.getFolderId(), f.getName(), f.getSizeBytes());
 	g_workspace.addFile(meta);
 
 	std::cout << "[uploadFile] Arquivo salvo: " << dest_path
@@ -81,22 +87,13 @@ static std::string handleListFiles(const json& args) {
 	const std::string workspaceObjId = args.value("workspace_object_id", "");
 	std::cout << "[listFiles] workspace=" << workspaceObjId << std::endl;
 
-	// Listar do disco para incluir arquivos de sessões anteriores
-	const fs::path output_dir("./arquivos");
 	json filesJson = json::array();
-
-	if (fs::exists(output_dir) && fs::is_directory(output_dir)) {
-		std::uint64_t id = 1;
-		for (const auto& entry : fs::directory_iterator(output_dir)) {
-			if (entry.is_regular_file()) {
-				// Retorna apenas metadados — sem conteúdo binário
-				filesJson.push_back({
-					{"id",         id++},
-					{"name",       entry.path().filename().string()},
-					{"size_bytes", static_cast<std::uint64_t>(entry.file_size())}
-				});
-			}
-		}
+	for (const auto& f : g_workspace.getFiles()) {
+		filesJson.push_back({
+			{"id",         f.getId()},
+			{"name",       f.getName()},
+			{"size_bytes", f.getSizeBytes()}
+		});
 	}
 
 	std::cout << "[listFiles] " << filesJson.size() << " arquivo(s) listado(s)." << std::endl;
@@ -109,7 +106,6 @@ static std::string handleDeleteFile(const json& args) {
 
 	const std::uint64_t fileId = args.at("file_id").get<std::uint64_t>();
 
-	// Procurar e remover do workspace
 	auto& files = const_cast<std::vector<File>&>(g_workspace.getFiles());
 	std::string deletedName;
 
@@ -121,7 +117,6 @@ static std::string handleDeleteFile(const json& args) {
 		}
 	}
 
-	// Tentar remover do disco
 	if (!deletedName.empty()) {
 		const fs::path filePath = fs::path("./arquivos") / deletedName;
 		if (fs::exists(filePath)) {
@@ -140,8 +135,7 @@ static std::string handleGetWorkspaceRef(const json& args) {
 
 	const std::uint64_t userId = args.at("user_id").get<std::uint64_t>();
 
-	// Retorna uma referência remota ao workspace (passagem por referência)
-	// O cliente recebe um RemoteObjectRef, não o objeto físico
+
 	std::string objectId = "workspace:" + std::to_string(g_workspace.getId()) +
 	                       ":user:" + std::to_string(userId);
 
@@ -155,12 +149,7 @@ static std::string handleGetWorkspaceRef(const json& args) {
 }
 
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Dispatcher RMI — loop principal do servidor
-//
-// Usa APENAS o IPCModule para comunicação de rede.
-// Faz parse do methodId e despacha para o handler correto.
-// ═══════════════════════════════════════════════════════════════════════════
+// Dispatcher RMI 
 
 static void RunAsLeader(int port) {
 	IPCModule ipc;
@@ -168,7 +157,7 @@ static void RunAsLeader(int port) {
 
 	std::cout << "Servidor RMI ativo na porta " << port << std::endl;
 
-	// Heartbeat thread (usa SocketUtils internamente — infraestrutura, não RMI)
+	
 	std::atomic<bool> hb_running{true};
 	std::thread hb_thread([&hb_running]() {
 		while (hb_running.load()) {
@@ -186,7 +175,7 @@ static void RunAsLeader(int port) {
 			SocketType clientFd;
 			std::string requestRaw = ipc.getRequest(clientFd);
 
-			// Parse da mensagem RMI
+			
 			json msg = json::parse(requestRaw);
 			std::string methodId = msg.at("methodId").get<std::string>();
 			json args = json::parse(msg.at("arguments").get<std::string>());
@@ -195,7 +184,7 @@ static void RunAsLeader(int port) {
 
 			std::string replyJson;
 
-			// ── Dispatch por methodId ──
+			// Dispatch por methodId 
 			if (methodId == "uploadFile") {
 				replyJson = handleUploadFile(args);
 			} else if (methodId == "listFiles") {
@@ -221,9 +210,9 @@ static void RunAsLeader(int port) {
 }
 
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Modo Backup (heartbeat listener — infraestrutura de coordenação)
-// ═══════════════════════════════════════════════════════════════════════════
+
+// Modo Backup 
+
 
 static bool RunAsBackup() {
 	std::cout << "Modo backup. Ouvindo heartbeat..." << std::endl;
@@ -258,9 +247,9 @@ static bool RunAsBackup() {
 }
 
 
-// ═══════════════════════════════════════════════════════════════════════════
-// main
-// ═══════════════════════════════════════════════════════════════════════════
+
+// Main
+
 
 int main() {
 	try {
@@ -272,7 +261,6 @@ int main() {
 			try {
 				RunAsLeader(SocketUtils::kPort);
 			} catch (const std::runtime_error&) {
-				// Falha no bind → outra instância é líder
 				bool should_retry = RunAsBackup();
 				if (!should_retry) break;
 				std::this_thread::sleep_for(std::chrono::seconds(1));
